@@ -1,0 +1,21 @@
+flowchart TD
+    A([開始]) --> B[gdal.Open DEM GeoTIFF]
+    B --> C[取得 GeoTransform\n左上角 XY、像素大小、旋轉]
+    C --> D[計算四角範圍\n左右X、上下Y、寬高]
+    D --> E[像素對齊推斷\nguess_alignment]
+    E --> F{餘數判斷}
+    F -- ≈ 0 --> G[pixel edge\n換算 center 座標]
+    F -- ≈ 像素/2 --> H[pixel center\n換算 edge 座標]
+    F -- 其他 --> I[不明\n顯示餘數]
+    G --> J[讀取投影座標系\nosr.SpatialReference]
+    H --> J
+    I --> J
+    J --> K{投影類型}
+    K -- IsProjected --> L[顯示名稱與線性單位]
+    K -- IsGeographic --> M[顯示名稱與角度單位]
+    L --> N[讀取 NoData 值]
+    M --> N
+    N --> O[讀取 Band 1 資料型態\ndtype_map]
+    O --> P[印出完整元資料報告]
+    P --> Q[ds = None 釋放資源]
+    Q --> R([結束])

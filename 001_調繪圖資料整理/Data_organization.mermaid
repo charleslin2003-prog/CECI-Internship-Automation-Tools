@@ -1,0 +1,38 @@
+flowchart TD
+    A([啟動 GUI]) --> B[載入 config.ini\n還原上次路徑設定]
+    B --> C[使用者設定路徑與搜尋深度]
+    C --> D[點擊「開始整理」]
+    D --> E[驗證四個路徑皆已填寫]
+    E --> F[儲存 config.ini]
+    F --> G[threading.Thread\n執行 core_process]
+
+    subgraph core [core_process]
+        G --> H
+
+        subgraph s1 [步驟一：掃描檔]
+            H[搜尋掃描來源資料夾] --> I{符合 XXXX-YY.jpg\n格式?}
+            I -- 是 --> J[建立 目標/分幅號/初調掃描/\n複製 JPG]
+            I -- 否 --> H
+        end
+
+        J --> K
+
+        subgraph s2 [步驟二/三：定位檔]
+            K[搜尋 JGW 來源資料夾] --> L{主檔名在\nprocessed_scan_bases?}
+            L -- 是 --> M[複製 JGW\n至對應 初調掃描/]
+            L -- 否 --> K
+        end
+
+        M --> N
+
+        subgraph s4 [步驟四：調繪照片]
+            N[逐分幅號處理] --> O[搜尋照片來源\n找名稱 = 分幅號 的子資料夾]
+            O --> P{找到 JPG?}
+            P -- 是 --> Q[複製至 初調照片/]
+            P -- 否 --> R[資料夾加後綴 __無]
+        end
+    end
+
+    Q --> S[顯示完成訊息\nmessagebox]
+    R --> S
+    S --> T([結束])

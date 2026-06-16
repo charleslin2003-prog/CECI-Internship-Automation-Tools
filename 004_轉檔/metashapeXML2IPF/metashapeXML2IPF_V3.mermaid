@@ -1,0 +1,40 @@
+flowchart TD
+    A([開始]) --> B[parse_metashape_xml\n讀取 XML]
+
+    subgraph parse [1. 解析模組]
+        B --> C[iterparse 逐節點]
+        C --> D[ImageDimensions\n→ 查 KNOWN_CAMERAS 取 ps]
+        D --> E[Photo → 建立照片清單]
+        E --> F[TiePoint → 連接點 + 流水號]
+        F --> G[ControlPoint → 控制點清單]
+    end
+
+    G --> H[select_tie_points_optimized]
+
+    subgraph select [2. 選點模組]
+        H --> I[建立 photo_to_tp_map]
+        I --> J[逐張影像處理]
+        J --> K[剔除邊緣 5% 點位]
+        K --> L[投入 3×3 九宮格]
+        L --> M[每格依 共視數↓ 距格心↑ 排序\n取前 pts_per_cell 點]
+        M --> N{總選點\n< 18?}
+        N -- 是 --> O[補償機制\n從有效點補足\n依共視數排序]
+        N -- 否 --> P[記錄統計 stats]
+        O --> P
+        P --> Q{還有下一張?}
+        Q -- 是 --> J
+        Q -- 否 --> R[回傳 selected_ids + stats]
+    end
+
+    R --> S[篩選 tps_final_list\n重編流水號 zfill]
+    S --> T[export_ipf_files\ncps + tps_final]
+
+    subgraph export [3. 輸出模組]
+        T --> U[建立 photo_data 字典\n控制點在前]
+        U --> V[逐影像輸出 .ipf]
+        V --> W[像素座標 → 影像座標系 mm\n原點為影像中心]
+        W --> X[寫出文字檔]
+    end
+
+    X --> Y[印出統計報告\n平均選點數、補點清單]
+    Y --> Z([結束])

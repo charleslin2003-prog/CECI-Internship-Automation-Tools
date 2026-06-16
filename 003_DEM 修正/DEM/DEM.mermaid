@@ -1,0 +1,29 @@
+flowchart TD
+    A([開始]) --> B[讀取 Excel\n取得解析度與圖幅清單]
+    B --> C[建立輸出資料夾]
+    C --> D[逐幅迴圈 tqdm]
+
+    D --> E{原始 DEM\n檔案存在?}
+    E -- 否 --> F[記錄錯誤\n找不到原始檔案]
+    E -- 是 --> G
+
+    subgraph process_tile [process_tile 函式]
+        G[Step A\ngdal.Open → MEM 副本] --> H[Step B\n極端值遮罩\n大於4000 或 小於-100 → NoData]
+        H --> I[Step C\ngdal.FillNodata 補洞]
+        I --> J[Step D\ngdal.Translate 裁切對齊\nprojWin 依 Excel 範圍]
+        J --> K{Translate\n成功?}
+        K -- 否 --> L[記錄錯誤\nTranslate 失敗]
+        K -- 是 --> M[Step E\n實心化\nNoData / NaN → 0]
+        M --> N[Step F\n寫出 GeoTIFF\nDEFLATE + Tiled + Float32]
+    end
+
+    N --> O{還有下一幅?}
+    F --> O
+    L --> O
+    O -- 是 --> D
+    O -- 否 --> P[統計成功 / 異常數量]
+    P --> Q{有異常?}
+    Q -- 是 --> R[寫出 處理異常清單.txt]
+    Q -- 否 --> S[印出完成訊息]
+    R --> S
+    S --> T([結束])

@@ -1,0 +1,55 @@
+flowchart TD
+    START([開始]) --> READ[讀取 AI SHP / 人工 SHP / 測區面 SHP]
+    READ --> DETECT{偵測 PT 欄位}
+
+    DETECT -->|雙邊皆有值| ASK_PT[詢問是否作為配對編號]
+    DETECT -->|單邊有值| WARN_PT[警告：單邊缺少\n改為自動模式]
+    DETECT -->|無 PT 欄位| AUTO
+
+    ASK_PT -->|Y| PT_MATCH[PT 欄位配對\n_match_by_pt]
+    ASK_PT -->|N| AUTO
+    WARN_PT --> AUTO[自動配對 _match_auto\n孤立點篩選 → 最近鄰 → 一對一去重]
+
+    PT_MATCH --> ASK_SUPP[詢問是否補點]
+    ASK_SUPP -->|N| ASSIGN
+    ASK_SUPP -->|Y| R1
+
+    R1[第一輪：孤立點篩選補點\n排除已配對點 → 孤立點篩選\n最近鄰配對 → 雙向去重 → 批次補入]
+    R1 --> CHK1{分佈均勻？\n最大 cell 小於 平均 × N}
+    CHK1 -->|YES| ASSIGN
+
+    CHK1 -->|NO| R2_LOOP
+
+    subgraph R2_LOOP [第二輪 Voronoi 迭代]
+        direction TB
+        L1[計算 Voronoi 找最大 cell] --> L2[全域剩餘孤立點篩選]
+        L2 --> L3[排序：最大 cell 內優先]
+        L3 --> L4[批次配對 雙向去重]
+        L4 --> L5[補入本輪結果]
+        L5 --> STOP{停止條件？\n均勻 or 候選點用完\nor 無孤立點 or 無可配對點}
+        STOP -->|NO| L1
+    end
+
+    STOP -->|YES| ASSIGN[_assign_match_id 統一流水號]
+    AUTO --> ASSIGN
+    ASSIGN --> SUMMARY[分佈摘要\n基準面積 / 平均負責面積 / 最大 cell 倍率]
+
+    SUMMARY --> NOPAIRS{pairs = 0？}
+    NOPAIRS -->|YES| ADD_PT[新增空白 PT 欄位\n提示手動填寫後重執行]
+    NOPAIRS -->|NO| SHP
+
+    subgraph SHP [輸出 SHP]
+        S1[control_point_lines.shp\nmatch_id / dist_m]
+        S1 --> S2[AI_ctrl_points_matchid.shp\n原始屬性 + match_id + X_new + Y_new + dx + dy]
+        S2 --> S3[Manual_ctrl_points_matchid.shp\n原始屬性 + match_id]
+    end
+
+    SHP --> XLSX
+
+    subgraph XLSX [輸出 xlsx]
+        X1[Sheet1 補點記錄\n輪次 / 迭代次數 / 方法 / 座標 / 距離]
+        X1 --> X2[Sheet2 ROI 稀疏報告\n控制點數 / 面積 / 密度\n最大cell所在ROI / 密度低於全域平均]
+    end
+
+    ADD_PT --> END_ERR([結束])
+    XLSX --> END([完成])

@@ -1,0 +1,28 @@
+flowchart TD
+    A([開始]) --> B[讀取待修正點\n待修正.shp]
+    B --> C[讀取 dX_kriging_1m.tif\n讀取 dY_kriging_1m.tif]
+    C --> D[檢查 transform / 尺寸一致性]
+    D --> E[建立有效 raster cell mask\ndX 且 dY 均非 NoData]
+    E --> F[對所有有效 cell 計算中心坐標\n建立 KDTree]
+    F --> G[逐點處理]
+
+    G --> H[由點坐標計算 raster row / col]
+    H --> I{點在 raster 範圍內？}
+
+    I -- 是 --> J{該 cell 為有效值？}
+    J -- 是 --> K[corr_type = raster\n直接取 dX / dY]
+    J -- 否 --> L[corr_type = nearest]
+
+    I -- 否 --> L
+
+    L --> M[KDTree 查找最近有效 cell\n取其 dX / dY\n記錄 near_dist]
+
+    K & M --> N[計算修正後坐標\nX_new = X_ori + dX_k\nY_new = Y_ori + dY_k]
+    N --> G
+
+    G --> |所有點處理完畢| O[更新 geometry 為修正後坐標]
+    O --> P[輸出修正後 shp\nSIGN_0527_修正後_raster_nearest.shp]
+    O --> Q{有 nearest 點？}
+    Q -- 是 --> R[輸出外插點清單 txt\nSIGN_外插最近網格清單.txt]
+    Q -- 否 --> S[txt 記錄：無外插點]
+    R & S --> Z([完成])

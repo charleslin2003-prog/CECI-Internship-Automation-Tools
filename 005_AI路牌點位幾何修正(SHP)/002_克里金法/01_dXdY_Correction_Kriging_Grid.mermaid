@@ -1,0 +1,22 @@
+flowchart TD
+    A([開始]) --> B[讀取 ROI polygon\nROI_V01_PairwiseDissolve.shp]
+    B --> C[讀取控制點\n修正前_控制點_操作.shp]
+    C --> D{CRS 一致？}
+    D -- 否 --> E[重投影控制點至 ROI CRS]
+    D -- 是 --> F
+    E --> F[檢查 dX / dY 欄位\n轉型為數值，移除 NaN]
+    F --> G[篩選落在 ROI 內的控制點\nintersects ROI union]
+    G --> H{有效點 ≥ 3？}
+    H -- 否 --> ERR1([錯誤：有效點不足])
+    H -- 是 --> I[移除重複坐標]
+    I --> J[計算 raster 範圍\n對齊整數公尺邊界]
+    J --> K[Rasterize ROI\n建立 ROI 遮罩 mask]
+    K --> L[取得 ROI 內所有像元中心坐標]
+    L --> M[建立 dX Ordinary Kriging 模型\nvariogram = spherical]
+    M --> N[建立 dY Ordinary Kriging 模型\nvariogram = spherical]
+    N --> O[分批 Kriging 內插\nchunk_size = 5000\nn_closest_points = 3]
+    O --> P[寫入 dX_raster / dY_raster\nROI 外保留 NoData]
+    P --> Q[輸出 dX_kriging_1m.tif]
+    P --> R[輸出 dY_kriging_1m.tif]
+    P --> S[輸出 dXdY_kriging_1m.tif\nBand1=dX, Band2=dY]
+    Q & R & S --> Z([完成])

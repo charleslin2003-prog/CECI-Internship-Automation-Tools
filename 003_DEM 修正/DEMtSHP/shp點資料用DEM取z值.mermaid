@@ -1,0 +1,21 @@
+flowchart TD
+    A([開始]) --> B[讀取 Excel\n取得圖框座標欄位]
+    B --> C[建立矩形圖框\nGeoDataFrame]
+    C --> D[讀取點位 SHP\npts_gdf]
+    D --> E[對齊 CRS\nset_crs allow_override]
+    E --> F[Spatial Join\ngpd.sjoin 點位 × 圖框]
+    F --> G[初始化 Z 欄位\n預設 -9999]
+    G --> H[依圖幅_5K 分群\ngroupby]
+    H --> I{找到對應\nDEM 檔?}
+    I -- 否 --> J[⚠️ 印出警告\n跳過此圖幅]
+    I -- 是 --> K[rasterio.open DEM]
+    K --> L[src.sample 萃取\n各點高程值]
+    L --> M{值 ≠ NoData\n且非 NaN?}
+    M -- 是 --> N[寫入 pts_gdf Z 欄位]
+    M -- 否 --> O[保留 -9999]
+    N --> P{還有下一\n個圖幅?}
+    O --> P
+    J --> P
+    P -- 是 --> I
+    P -- 否 --> Q[pts_gdf.to_file\n輸出新 SHP]
+    Q --> R([結束])
