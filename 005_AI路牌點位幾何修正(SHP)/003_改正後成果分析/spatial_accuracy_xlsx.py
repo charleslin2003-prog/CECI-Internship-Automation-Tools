@@ -10,37 +10,54 @@ from scipy.spatial import cKDTree
 import rasterio
 
 # =========================================================================
-# 1. 專案路徑與欄位配置（Windows 絕對路徑）
+# 1. 專案路徑配置（輸出完全打包收納在 0617 目錄下）
 # =========================================================================
 SHP_HUMAN = r"修正後.shp"
 SHP_AI = r"SIGN_0527_修正後_raster_nearest.shp"
 SHP_ROI = r"ROI_V01.shp"
 
-# 克里金修正形變網格路徑
-TIFF_DX = r"dX_kriging_1m.tif"
-TIFF_DY = r"dY_kriging_1m.tif"
+out_dir = r"0617"
 
-OUT_XLSX = r"spatial_accuracy_report.xlsx"
-OUT_SHP_LINES = r"offset_vectors.shp"
+TIFF_DX = os.path.join(out_dir, "dX_kriging_1m.tif")
+TIFF_DY = os.path.join(out_dir, "dY_kriging_1m.tif")
+
+OUT_XLSX = os.path.join(out_dir, "spatial_accuracy_report.xlsx")
+OUT_SHP_LINES = os.path.join(out_dir, "offset_vectors.shp")
 
 COL_ROI_ID = "id"
 
 # 🛠️ 核心門檻參數設定
-RMSE_THRESHOLD = 1.0  # 💡 唯一判定標準：2D 平面幾何 RMSE 重算門檻（公尺）
+RMSE_THRESHOLD = 0.5  # 判定標準：2D 平面幾何 RMSE 重算門檻收緊為 0.5 公尺
 MAX_DISTANCE_LIMIT = 5.0  # 跳躍後的二次搜尋半徑上限（公尺）
+DEFAULT_TAIWAN_CRS = "EPSG:3826"  # 💡 座標防護網：當圖層缺少.prj檔時，預設強制指定 TWD97 TM2
 
-os.makedirs(os.path.dirname(OUT_XLSX), exist_ok=True)
+os.makedirs(out_dir, exist_ok=True)
 
 # =========================================================================
-# 2. GIS 空間幾何載入與真實座標萃取
+# 2. GIS 空間幾何載入與真實座標萃取 (💡 已加入 CRS 遺失防護網)
 # =========================================================================
 print("⏳ [STEP 1] 載入圖層並同步座標系統...")
 gdf_human = gpd.read_file(SHP_HUMAN)
 gdf_ai = gpd.read_file(SHP_AI)
 gdf_roi = gpd.read_file(SHP_ROI)
 
-if gdf_human.crs != gdf_ai.crs or gdf_human.crs != gdf_roi.crs:
+# 💡 【核心修復】自動防護無 CRS / 無 .prj 檔狀況
+if gdf_human.crs is None:
+    print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_HUMAN)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
+    gdf_human.crs = DEFAULT_TAIWAN_CRS
+
+if gdf_ai.crs is None:
+    print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_AI)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
+    gdf_ai.crs = DEFAULT_TAIWAN_CRS
+
+if gdf_roi.crs is None:
+    print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_ROI)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
+    gdf_roi.crs = DEFAULT_TAIWAN_CRS
+
+# 安全轉換座標系統
+if gdf_ai.crs != gdf_human.crs:
     gdf_ai = gdf_ai.to_crs(gdf_human.crs)
+if gdf_roi.crs != gdf_human.crs:
     gdf_roi = gdf_roi.to_crs(gdf_human.crs)
 
 # 強制從 Geometry 本體萃取 True X, Y 座標
@@ -48,6 +65,9 @@ gdf_human["true_h_x"] = gdf_human.geometry.x
 gdf_human["true_h_y"] = gdf_human.geometry.y
 gdf_ai["true_a_x"] = gdf_ai.geometry.x
 gdf_ai["true_a_y"] = gdf_ai.geometry.y
+
+gdf_human["_h_idx"] = range(len(gdf_human))
+gdf_ai["_a_idx"] = range(len(gdf_ai))
 
 # =========================================================================
 # 3. 核心依據：讀取克里金 Tiff 進行「有依據的空間預測跳躍」
@@ -66,16 +86,14 @@ if os.path.exists(TIFF_DX) and os.path.exists(TIFF_DY):
             dy_tif_values.append(
                 val[0] if (hasattr(val, '__iter__') or isinstance(val, (list, np.ndarray))) else np.nan)
 else:
-    raise FileNotFoundError(f"❌ 找不到指定的克里金 TIFF 檔，請確認路徑。")
+    raise FileNotFoundError(f"❌ 找不到指定的克里金 TIFF 檔，請確認路徑：\n{TIFF_DX}")
 
 gdf_human["dX_tif"] = dx_tif_values
 gdf_human["dY_tif"] = dy_tif_values
 
-# 安全防護：若落於網格邊緣外則不跳躍(補0)
 gdf_human["dX_tif"] = gdf_human["dX_tif"].fillna(0)
 gdf_human["dY_tif"] = gdf_human["dY_tif"].fillna(0)
 
-# 計算經克里金形變場修正後的預估虛擬座標
 gdf_human["pred_h_x"] = gdf_human["true_h_x"] + gdf_human["dX_tif"]
 gdf_human["pred_h_y"] = gdf_human["true_h_y"] + gdf_human["dY_tif"]
 
@@ -85,9 +103,6 @@ gdf_human["pred_h_y"] = gdf_human["true_h_y"] + gdf_human["dY_tif"]
 print("⏳ [STEP 3] 執行 1對1 獨立配對機制（以跳躍後圓心搜尋 5m 內最近 AI 點）...")
 coords_pred_human = np.column_stack((gdf_human["pred_h_x"], gdf_human["pred_h_y"]))
 coords_ai = np.column_stack((gdf_ai["true_a_x"], gdf_ai["true_a_y"]))
-
-gdf_human["_h_idx"] = range(len(gdf_human))
-gdf_ai["_a_idx"] = range(len(gdf_ai))
 
 tree_ai = cKDTree(coords_ai)
 pairs_indices = tree_ai.query_ball_tree(cKDTree(coords_pred_human), r=MAX_DISTANCE_LIMIT)
@@ -119,10 +134,9 @@ gdf_valid_pairs = matched_human.merge(gdf_ai.drop(columns="geometry"), on="_a_id
 gdf_valid_pairs = gpd.sjoin(gdf_valid_pairs, gdf_roi[[COL_ROI_ID, 'geometry']], how="left", predicate="intersects")
 
 # =========================================================================
-# 5. 分區純幾何統計摘要與判定 (欄位大瘦身)
+# 5. 分區純幾何統計摘要與判定
 # =========================================================================
 print("⏳ [STEP 4] 計算真實二維偏移量與分區平面 RMSE 統計...")
-# 計算真值點到配對AI點的實際二維觀測誤差
 gdf_valid_pairs["dX_obs"] = gdf_valid_pairs["true_a_x"] - gdf_valid_pairs["true_h_x"]
 gdf_valid_pairs["dY_obs"] = gdf_valid_pairs["true_a_y"] - gdf_valid_pairs["true_h_y"]
 gdf_valid_pairs["dist2d_obs"] = np.sqrt(gdf_valid_pairs["dX_obs"] ** 2 + gdf_valid_pairs["dY_obs"] ** 2)
@@ -132,7 +146,6 @@ def rmse(series):
     return np.sqrt(np.mean(series ** 2)) if len(series) > 0 else 0
 
 
-# 進行 Groupby 統計
 roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_ID).agg(
     pt_count=('dX_obs', 'count'),
     mean_2d=('dist2d_obs', 'mean'),
@@ -140,7 +153,6 @@ roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_ID).agg(
 ).reset_index()
 
 
-# 💡 核心變更：判定標準【只看幾何】，平面 RMSE > 1.0m 即為 REDO
 def judge_pure_geometry(row):
     if float(row["rmse_2d"]) > RMSE_THRESHOLD:
         return "REDO (需重算)"
@@ -149,7 +161,6 @@ def judge_pure_geometry(row):
 
 roi_stats_raw["Status"] = roi_stats_raw.apply(judge_pure_geometry, axis=1)
 
-# 篩選保留指定的 5 個核心精簡欄位
 roi_stats = roi_stats_raw[[COL_ROI_ID, "pt_count", "mean_2d", "rmse_2d", "Status"]].copy()
 df_redo = roi_stats[roi_stats["Status"] == "REDO (需重算)"].copy()
 
@@ -159,10 +170,11 @@ df_redo = roi_stats[roi_stats["Status"] == "REDO (需重算)"].copy()
 print("⏳ [STEP 5] 匯出 1對1 偏移向量線 Shapefile...")
 lines_geometry = [LineString([(r["true_h_x"], r["true_h_y"]), (r["true_a_x"], r["true_a_y"])]) for _, r in
                   gdf_valid_pairs.iterrows()]
+
 gdf_lines = gpd.GeoDataFrame(
     gdf_valid_pairs[[COL_ROI_ID, "dX_obs", "dY_obs", "dist2d_obs"]],
     geometry=lines_geometry,
-    crs=gdf_valid_pairs.crs
+    crs=gdf_human.crs  # 💡 引用安全指派後的明確 CRS，解決丟失問題
 )
 gdf_lines = gdf_lines.rename(columns={COL_ROI_ID: "roi_id", "dist2d_obs": "dist2d"})
 gdf_lines.to_file(OUT_SHP_LINES, encoding="utf-8")
@@ -199,25 +211,24 @@ align_center, align_left, align_right = Alignment(horizontal="center", vertical=
                                                                                                      vertical="center"), Alignment(
     horizontal="right", vertical="center")
 
-# ---- TAB 1: ROI STATS (唯開門見山第一分頁) ----
+# ---- TAB 1: ROI STATS ----
 ws_stats = wb.active
 ws_stats.title = "ROI精度統計表"
 ws_stats.views.sheetView[0].showGridLines = True
-ws_stats.freeze_panes = "A2"  # 凍結首行標頭
+ws_stats.freeze_panes = "A2"
 
-# 💡 精準對齊經理指定的 5 個核心欄位
-headers_stats = ["ROI分區ID (id)", "唯一配對點數", "幾何平均偏移 (m)", "幾何平面 RMSE (m)", "判定結果"]
+headers_stats = ["ROI分區ID (id)", "唯一配對點數", "幾何平均偏移 (m)", "幾幾何平面 RMSE (m)", "判定結果"]
 
-# 寫入第 1 行表頭
+# 寫入表頭
 for col_idx, text in enumerate(headers_stats, 1):
     cell = ws_stats.cell(row=1, column=col_idx, value=text)
     cell.font = font_header;
     cell.fill = fill_header;
     cell.alignment = align_center
 
-# 寫入明細數據
+# 寫入數據明細
 for row_idx, row_data in enumerate(roi_stats.itertuples(index=False), 2):
-    status_str = str(row_data[-1])  # 強制確保為中文字串，封殺0與1的數值轉換
+    status_str = str(row_data[-1])
     for col_idx, val in enumerate(row_data, 1):
         cell = ws_stats.cell(row=row_idx, column=col_idx, value=val);
         cell.font = font_body;
@@ -240,7 +251,7 @@ for row_idx, row_data in enumerate(roi_stats.itertuples(index=False), 2):
     if row_idx % 2 == 1 and "REDO" not in status_str:
         for col in range(1, len(headers_stats)): ws_stats.cell(row=row_idx, column=col).fill = fill_zebra
 
-# 底部統計合計列 (精準連動 5 個欄位)
+# 底部統計合計列
 total_row = len(roi_stats) + 2
 ws_stats.cell(row=total_row, column=1, value="整體平均 (Average)").font = font_bold;
 ws_stats.cell(row=total_row, column=1).alignment = align_left;
@@ -295,6 +306,4 @@ for sheet in wb.worksheets:
         sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
 wb.save(OUT_XLSX)
-print("🎉 [純幾何判定穩定版] 執行成功！文字判定完全修復，欄位大瘦身完畢！")
-print(f"📈 瘦身成果 Excel 報表路徑：{OUT_XLSX}")
-print(f"🗺️ 1對1 幾何偏移向量線 SHP：{OUT_SHP_LINES}")
+print("🎉 [CRS 遺失防護網布設成功] 腳本順利通過！資料已全數寫入目錄。")
