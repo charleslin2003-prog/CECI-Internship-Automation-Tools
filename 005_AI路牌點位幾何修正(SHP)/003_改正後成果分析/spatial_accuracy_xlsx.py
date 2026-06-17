@@ -28,9 +28,13 @@ OUT_SHP_LINES = os.path.join(out_dir, "offset_vectors.shp")
 COL_ROI_ID = "id"
 
 # 🛠️ 核心門檻參數設定
-RMSE_THRESHOLD = 0.5  # 判定標準：2D 平面幾何 RMSE 重算門檻收緊為 0.5 公尺
-MAX_DISTANCE_LIMIT = 5.0  # 跳躍後的二次搜尋半徑上限（公尺）
-DEFAULT_TAIWAN_CRS = "EPSG:3826"  # 💡 座標防護網：當圖層缺少.prj檔時，預設強制指定 TWD97 TM2
+RMSE_THRESHOLD   = 0.5        # RMSE 重算門檻（公尺）
+DEFAULT_TAIWAN_CRS = "EPSG:3826"
+
+# 🔍 配對搜尋參數
+SEARCH_R1        = 1.0        # 第一階段：最近點搜尋半徑（公尺），找到即配對不做扇形
+SEARCH_R2        = 5.0        # 第二階段：扇形搜尋半徑（公尺），第一階段無結果時啟用
+SECTOR_HALF_DEG  = 20.0       # 第二階段扇形半角（度），總扇形 = SECTOR_HALF_DEG × 2
 
 os.makedirs(out_dir, exist_ok=True)
 
@@ -49,11 +53,11 @@ if gdf_human.crs is None:
 
 if gdf_ai.crs is None:
     print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_AI)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
-    gdf_ai.crs = DEFAULT_TAIWAN_CRS
+    gdf_ai = gdf_ai.set_crs(DEFAULT_TAIWAN_CRS, allow_override=True)
 
 if gdf_roi.crs is None:
     print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_ROI)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
-    gdf_roi.crs = DEFAULT_TAIWAN_CRS
+    gdf_roi = gdf_roi.set_crs(DEFAULT_TAIWAN_CRS, allow_override=True)
 
 # 安全轉換座標系統
 if gdf_ai.crs != gdf_human.crs:
@@ -100,21 +104,55 @@ gdf_human["pred_h_x"] = gdf_human["true_h_x"] + gdf_human["dX_tif"]
 gdf_human["pred_h_y"] = gdf_human["true_h_y"] + gdf_human["dY_tif"]
 
 # =========================================================================
-# 4. 以「預測跳躍座標」進行 1對1 唯一配對（不共用點機制）
+# 4. 以「最近點優先 + 扇形退回」進行 1對1 唯一配對
 # =========================================================================
-print("⏳ [STEP 3] 執行 1對1 獨立配對機制（以跳躍後圓心搜尋 5m 內最近 AI 點）...")
-coords_pred_human = np.column_stack((gdf_human["pred_h_x"], gdf_human["pred_h_y"]))
-coords_ai = np.column_stack((gdf_ai["true_a_x"], gdf_ai["true_a_y"]))
+print("⏳ [STEP 3] 執行配對：1m 內取最近點；無結果則退回克里金方向扇形搜尋...")
 
-tree_ai = cKDTree(coords_ai)
-pairs_indices = tree_ai.query_ball_tree(cKDTree(coords_pred_human), r=MAX_DISTANCE_LIMIT)
+SECTOR_HALF_RAD = np.radians(SECTOR_HALF_DEG)
+
+coords_pred_human = np.column_stack((gdf_human["pred_h_x"], gdf_human["pred_h_y"]))
+coords_ai         = np.column_stack((gdf_ai["true_a_x"],    gdf_ai["true_a_y"]))
+
+# 從克里金 dX/dY 計算每個人工點的預測方向（弧度）
+pred_angles   = np.arctan2(gdf_human["dY_tif"].values, gdf_human["dX_tif"].values)
+has_direction = ~((gdf_human["dX_tif"].values == 0) & (gdf_human["dY_tif"].values == 0))
+
+tree_ai        = cKDTree(coords_ai)
+tree_pred      = cKDTree(coords_pred_human)
+
+# 第一階段：SEARCH_R1 內所有候選（ai → pred_human）
+stage1_indices = tree_ai.query_ball_tree(tree_pred, r=SEARCH_R1)
+# 第二階段：SEARCH_R2 內所有候選，供扇形篩選用
+stage2_indices = tree_ai.query_ball_tree(tree_pred, r=SEARCH_R2)
 
 all_possible_matches = []
-# pairs_indices[ai_idx] = 與 ai[ai_idx] 距離 ≤ MAX_DISTANCE_LIMIT 的 pred_human 索引列表
-for ai_idx, human_indices in enumerate(pairs_indices):
-    for h_idx in human_indices:
-        dist_residual = np.sqrt(np.sum((coords_pred_human[h_idx] - coords_ai[ai_idx]) ** 2))
-        all_possible_matches.append({'h_idx': h_idx, 'a_idx': ai_idx, 'dist_res': dist_residual})
+
+for ai_idx in range(len(coords_ai)):
+    r1_human = stage1_indices[ai_idx]
+
+    if r1_human:
+        # ── 第一階段：1m 內有候選，直接加入（不做扇形）──────────────────
+        for h_idx in r1_human:
+            dist = np.linalg.norm(coords_pred_human[h_idx] - coords_ai[ai_idx])
+            all_possible_matches.append({
+                'h_idx': h_idx, 'a_idx': ai_idx,
+                'dist_res': dist, 'stage': 1,
+            })
+    else:
+        # ── 第二階段：1m 內無候選，退回扇形搜尋 ─────────────────────────
+        for h_idx in stage2_indices[ai_idx]:
+            # nodata 點（dX=dY=0）跳過扇形，直接納入
+            if has_direction[h_idx]:
+                vec        = coords_ai[ai_idx] - coords_pred_human[h_idx]
+                angle_to_ai = np.arctan2(vec[1], vec[0])
+                angle_diff  = (angle_to_ai - pred_angles[h_idx] + np.pi) % (2 * np.pi) - np.pi
+                if abs(angle_diff) > SECTOR_HALF_RAD:
+                    continue
+            dist = np.linalg.norm(coords_pred_human[h_idx] - coords_ai[ai_idx])
+            all_possible_matches.append({
+                'h_idx': h_idx, 'a_idx': ai_idx,
+                'dist_res': dist, 'stage': 2,
+            })
 
 df_matches_pool = pd.DataFrame(all_possible_matches)
 valid_pair_rows = []
@@ -127,10 +165,10 @@ if not df_matches_pool.empty:
         if h_id not in used_human and a_id not in used_ai:
             used_human.add(h_id)
             used_ai.add(a_id)
-            valid_pair_rows.append({'_h_idx': h_id, '_a_idx': a_id})
+            valid_pair_rows.append({'_h_idx': h_id, '_a_idx': a_id, 'stage': int(match['stage'])})
 
 if not valid_pair_rows:
-    raise ValueError("❌ 錯誤：在克里金修正基礎下，5 米範圍內找不到任何匹配的 AI 改正點！")
+    raise ValueError("❌ 錯誤：兩階段搜尋均無結果，請檢查搜尋參數或圖層座標系是否一致。")
 
 matched_human = gdf_human.merge(pd.DataFrame(valid_pair_rows), on="_h_idx", how="inner")
 gdf_valid_pairs = matched_human.merge(gdf_ai.drop(columns="geometry"), on="_a_idx", how="inner")
@@ -163,15 +201,22 @@ def judge_pure_geometry(row):
     return "PASS (合格)"
 
 
-roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_ID).agg(
+roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_JOIN).agg(
     pt_count=('dX_obs', 'count'),
     mean_2d=('dist2d_obs', 'mean'),
     rmse_2d=('dist2d_obs', rmse)
 ).reset_index()
 
+# ── 補回無配對點的 ROI，避免從報表消失 ──────────────────────────────
+all_roi_ids = gdf_roi[[COL_ROI_ID]].rename(columns={COL_ROI_ID: COL_ROI_JOIN}).drop_duplicates()
+roi_stats_raw = all_roi_ids.merge(roi_stats_raw, on=COL_ROI_JOIN, how="left")
+roi_stats_raw["pt_count"] = roi_stats_raw["pt_count"].fillna(0).astype(int)
+# mean_2d / rmse_2d 保持 NaN，judge 會判為 N/A (無配對點)
+# ─────────────────────────────────────────────────────────────────────
+
 roi_stats_raw["Status"] = roi_stats_raw.apply(judge_pure_geometry, axis=1)
 
-roi_stats = roi_stats_raw[[COL_ROI_ID, "pt_count", "mean_2d", "rmse_2d", "Status"]].copy()
+roi_stats = roi_stats_raw[[COL_ROI_JOIN, "pt_count", "mean_2d", "rmse_2d", "Status"]].copy()
 df_redo = roi_stats[roi_stats["Status"] == "REDO (需重算)"].copy()
 
 # =========================================================================
@@ -182,11 +227,11 @@ lines_geometry = [LineString([(r["true_h_x"], r["true_h_y"]), (r["true_a_x"], r[
                   gdf_valid_pairs.iterrows()]
 
 gdf_lines = gpd.GeoDataFrame(
-    gdf_valid_pairs[[COL_ROI_ID, "dX_obs", "dY_obs", "dist2d_obs"]],
+    gdf_valid_pairs[[COL_ROI_JOIN, "dX_obs", "dY_obs", "dist2d_obs"]],
     geometry=lines_geometry,
     crs=gdf_human.crs  # 💡 引用安全指派後的明確 CRS，解決丟失問題
 )
-gdf_lines = gdf_lines.rename(columns={COL_ROI_ID: "roi_id", "dist2d_obs": "dist2d"})
+gdf_lines = gdf_lines.rename(columns={"dist2d_obs": "dist2d"})
 gdf_lines.to_file(OUT_SHP_LINES, encoding="utf-8")
 
 # =========================================================================
@@ -240,26 +285,30 @@ for col_idx, text in enumerate(headers_stats, 1):
 for row_idx, row_data in enumerate(roi_stats.itertuples(index=False), 2):
     status_str = str(row_data[-1])
     for col_idx, val in enumerate(row_data, 1):
-        cell = ws_stats.cell(row=row_idx, column=col_idx, value=val);
-        cell.font = font_body;
+        cell = ws_stats.cell(row=row_idx, column=col_idx, value=val)
+        cell.font = font_body
         cell.border = border_cell
+        # 先設底色：REDO 整列紅底，其餘奇數列斑馬
+        if "REDO" in status_str:
+            cell.fill = fill_redo
+        elif row_idx % 2 == 1:
+            cell.fill = fill_zebra
+        # 再處理欄位格式（判定欄字體會在下面覆蓋）
         if col_idx == 1:
             cell.alignment = align_center
         elif col_idx == 2:
-            cell.alignment = align_right; cell.number_format = "#,##0"
+            cell.alignment = align_right
+            cell.number_format = "#,##0"
         elif 3 <= col_idx <= 4:
-            cell.alignment = align_right; cell.number_format = "0.000"
+            cell.alignment = align_right
+            cell.number_format = "0.000"
         elif col_idx == 5:
             cell.alignment = align_center
             if "REDO" in status_str:
-                cell.fill = fill_redo;
                 cell.font = Font(name="Microsoft JhengHei", size=10, bold=True, color=RED_ALERT_TXT)
             else:
-                cell.fill = fill_pass;
+                cell.fill = fill_pass  # PASS 只有判定欄用綠色
                 cell.font = Font(name="Microsoft JhengHei", size=10, bold=True, color=GREEN_PASS_TXT)
-
-    if row_idx % 2 == 1 and "REDO" not in status_str:
-        for col in range(1, len(headers_stats)): ws_stats.cell(row=row_idx, column=col).fill = fill_zebra
 
 # 底部統計合計列
 total_row = len(roi_stats) + 2
