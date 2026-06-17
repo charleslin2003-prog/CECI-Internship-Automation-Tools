@@ -16,11 +16,12 @@ SHP_HUMAN = r"修正後.shp"
 SHP_AI = r"SIGN_0527_修正後_raster_nearest.shp"
 SHP_ROI = r"ROI_V01.shp"
 
-out_dir = r"0617"
 
-TIFF_DX = os.path.join(out_dir, "dX_kriging_1m.tif")
-TIFF_DY = os.path.join(out_dir, "dY_kriging_1m.tif")
+TIFF_dir = r"d:\your_project\kriging_output"
+TIFF_DX = os.path.join(TIFF_dir, "dX_kriging_1m.tif")
+TIFF_DY = os.path.join(TIFF_dir, "dY_kriging_1m.tif")
 
+out_dir = r"d:\your_project\report_output"
 OUT_XLSX = os.path.join(out_dir, "spatial_accuracy_report.xlsx")
 OUT_SHP_LINES = os.path.join(out_dir, "offset_vectors.shp")
 
@@ -86,7 +87,8 @@ if os.path.exists(TIFF_DX) and os.path.exists(TIFF_DY):
             dy_tif_values.append(
                 val[0] if (hasattr(val, '__iter__') or isinstance(val, (list, np.ndarray))) else np.nan)
 else:
-    raise FileNotFoundError(f"❌ 找不到指定的克里金 TIFF 檔，請確認路徑：\n{TIFF_DX}")
+    # 💡 修正對象：精準對齊您的新變數名稱 TIFF_DX，提供正確的偵錯導引
+    raise FileNotFoundError(f"❌ 錯誤：找不到指定的克里金 TIFF 改正網格檔，請確認路徑：\n{TIFF_DX}")
 
 gdf_human["dX_tif"] = dx_tif_values
 gdf_human["dY_tif"] = dy_tif_values
@@ -306,4 +308,6 @@ for sheet in wb.worksheets:
         sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
 wb.save(OUT_XLSX)
-print("🎉 [CRS 遺失防護網布設成功] 腳本順利通過！資料已全數寫入目錄。")
+print("🎉 [品質成果收納完畢] 經典 5 欄純幾何版腳本無誤執行完畢！")
+print(f"📈 瘦身成果 Excel 報表路徑：{OUT_XLSX}")
+print(f"🗺️ 1對1 幾何偏移向量線 SHP：{OUT_SHP_LINES}")

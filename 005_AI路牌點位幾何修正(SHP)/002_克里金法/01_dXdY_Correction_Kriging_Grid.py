@@ -35,7 +35,7 @@ roi_path = r"ROI_V01_PairwiseDissolve.shp"
 
 point_path = r"修正前_控制點_操作.shp"
 
-out_dir = r""
+out_dir = r"d:\your_project\kriging_output"
 
 out_dx_tif = os.path.join(out_dir, "dX_kriging_1m.tif")
 out_dy_tif = os.path.join(out_dir, "dY_kriging_1m.tif")

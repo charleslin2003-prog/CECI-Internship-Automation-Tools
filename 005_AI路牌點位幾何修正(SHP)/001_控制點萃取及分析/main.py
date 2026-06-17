@@ -3,6 +3,7 @@ AI 路牌控制點萃取工具
 功能：控制點配對 → 輸出連線 SHP + AI/人工控制點 SHP（含 match_id）+ 補點 log xlsx
 """
 
+import os
 import sys
 import geopandas as gpd
 import pandas as pd
@@ -12,16 +13,17 @@ from shapely.geometry import LineString
 from data_preprocess import DataPreprocessor
 
 # ─── 輸入檔案路徑 ────────────────────────────────────────────────────
-AI_SHP_PATH     = r"修正前.shp"
-MANUAL_SHP_PATH = r"修正後.shp"
-SURVEY_SHP_PATH = r"ROI_V01.shp"   # 實際測區面資料（可留空 ""）
+AI_SHP_PATH     = r"d:\your_project\AI_points.shp"
+MANUAL_SHP_PATH = r"d:\your_project\Manual_points.shp"
+SURVEY_SHP_PATH = r"d:\your_project\survey_area.shp"   # 實際測區面資料（可留空 ""）
 
-# ─── 輸出路徑 ────────────────────────────────────────────────────────
-OUTPUT_DIR           = r"ctrl_output"
-OUTPUT_LINES_PATH    = r"ctrl_output_V1\control_point_lines.shp"
-OUTPUT_AI_CTRL_PATH  = r"ctrl_output_V1\AI_ctrl_points_matchid.shp"
-OUTPUT_MAN_CTRL_PATH = r"ctrl_output_V1\Manual_ctrl_points_matchid.shp"
-OUTPUT_LOG_PATH      = r"supplement_log.xlsx"
+# ─── 輸出根目錄 ──────────────────────────────────────────────────────
+OUTPUT_DIR = r"d:\your_project\ctrl_output"
+
+OUTPUT_LINES_PATH    = os.path.join(OUTPUT_DIR, "control_point_lines.shp")
+OUTPUT_AI_CTRL_PATH  = os.path.join(OUTPUT_DIR, "AI_ctrl_points_matchid.shp")
+OUTPUT_MAN_CTRL_PATH = os.path.join(OUTPUT_DIR, "Manual_ctrl_points_matchid.shp")
+OUTPUT_LOG_PATH      = os.path.join(OUTPUT_DIR, "supplement_log.xlsx")
 
 # ─── 配對參數 ────────────────────────────────────────────────────────
 MAX_MATCH_DIST      = 3.0    # 最大配對距離（公尺）
@@ -110,8 +112,8 @@ def main():
         ai_row["match_id"] = mid
         ai_row["X_new"]    = round(mx, 4)
         ai_row["Y_new"]    = round(my, 4)
-        ai_row["dX"]       = round(mx - ax, 4)
-        ai_row["dY"]       = round(my - ay, 4)
+        ai_row["dx"]       = round(mx - ax, 4)
+        ai_row["dy"]       = round(my - ay, 4)
         ai_ctrl_records.append(ai_row)
 
         man_row = manual_gdf.loc[pair["manual_idx"]].copy()
