@@ -45,7 +45,7 @@ gdf_roi = gpd.read_file(SHP_ROI)
 # 💡 【核心修復】自動防護無 CRS / 無 .prj 檔狀況
 if gdf_human.crs is None:
     print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_HUMAN)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
-    gdf_human.crs = DEFAULT_TAIWAN_CRS
+    gdf_human = gdf_human.set_crs(DEFAULT_TAIWAN_CRS, allow_override=True)
 
 if gdf_ai.crs is None:
     print(f"⚠️ 提示：偵測到 '{os.path.basename(SHP_AI)}' 遺失座標系定義，已自動補回: {DEFAULT_TAIWAN_CRS}")
@@ -110,6 +110,7 @@ tree_ai = cKDTree(coords_ai)
 pairs_indices = tree_ai.query_ball_tree(cKDTree(coords_pred_human), r=MAX_DISTANCE_LIMIT)
 
 all_possible_matches = []
+# pairs_indices[ai_idx] = 與 ai[ai_idx] 距離 ≤ MAX_DISTANCE_LIMIT 的 pred_human 索引列表
 for ai_idx, human_indices in enumerate(pairs_indices):
     for h_idx in human_indices:
         dist_residual = np.sqrt(np.sum((coords_pred_human[h_idx] - coords_ai[ai_idx]) ** 2))
@@ -133,7 +134,14 @@ if not valid_pair_rows:
 
 matched_human = gdf_human.merge(pd.DataFrame(valid_pair_rows), on="_h_idx", how="inner")
 gdf_valid_pairs = matched_human.merge(gdf_ai.drop(columns="geometry"), on="_a_idx", how="inner")
-gdf_valid_pairs = gpd.sjoin(gdf_valid_pairs, gdf_roi[[COL_ROI_ID, 'geometry']], how="left", predicate="intersects")
+# join 後去重，保留第一個匹配的 ROI，sjoin 前先重命名 ROI 欄位，避免衝突
+gdf_roi_join = gdf_roi[[COL_ROI_ID, 'geometry']].rename(columns={COL_ROI_ID: 'roi_id'})
+gdf_valid_pairs = gpd.sjoin(gdf_valid_pairs, gdf_roi_join,
+                             how="left", predicate="intersects")
+gdf_valid_pairs = gdf_valid_pairs[~gdf_valid_pairs.index.duplicated(keep='first')]
+
+# 後續全改用 'roi_id'
+COL_ROI_JOIN = 'roi_id'
 
 # =========================================================================
 # 5. 分區純幾何統計摘要與判定
@@ -145,7 +153,14 @@ gdf_valid_pairs["dist2d_obs"] = np.sqrt(gdf_valid_pairs["dX_obs"] ** 2 + gdf_val
 
 
 def rmse(series):
-    return np.sqrt(np.mean(series ** 2)) if len(series) > 0 else 0
+    return np.sqrt(np.mean(series ** 2)) if len(series) > 0 else np.nan
+
+def judge_pure_geometry(row):
+    if pd.isna(row["rmse_2d"]):
+        return "N/A (無配對點)"
+    if float(row["rmse_2d"]) > RMSE_THRESHOLD:
+        return "REDO (需重算)"
+    return "PASS (合格)"
 
 
 roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_ID).agg(
@@ -153,13 +168,6 @@ roi_stats_raw = gdf_valid_pairs.groupby(COL_ROI_ID).agg(
     mean_2d=('dist2d_obs', 'mean'),
     rmse_2d=('dist2d_obs', rmse)
 ).reset_index()
-
-
-def judge_pure_geometry(row):
-    if float(row["rmse_2d"]) > RMSE_THRESHOLD:
-        return "REDO (需重算)"
-    return "PASS (合格)"
-
 
 roi_stats_raw["Status"] = roi_stats_raw.apply(judge_pure_geometry, axis=1)
 
@@ -219,7 +227,7 @@ ws_stats.title = "ROI精度統計表"
 ws_stats.views.sheetView[0].showGridLines = True
 ws_stats.freeze_panes = "A2"
 
-headers_stats = ["ROI分區ID (id)", "唯一配對點數", "幾何平均偏移 (m)", "幾幾何平面 RMSE (m)", "判定結果"]
+headers_stats = ["ROI分區ID (id)", "唯一配對點數", "幾何平均偏移 (m)", "幾何平面 RMSE (m)", "判定結果"]
 
 # 寫入表頭
 for col_idx, text in enumerate(headers_stats, 1):
