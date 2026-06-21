@@ -58,10 +58,10 @@ joined_gdf = gpd.sjoin(pts_gdf, grid_gdf, how="left", predicate="intersects")
 pts_gdf[z_field_name] = -9999.0
 
 # ==========================================
-# --- 4. 批次萃取 DEM 高程 (Rasterio) ---
+# --- 4. 批次萃取 DEM 修正 高程 (Rasterio) ---
 # ==========================================
 print("\n3. 開始提取高程...")
-# 將點位依照所屬的「圖幅_5K」進行分群，這樣每個 DEM 檔只要打開一次就好
+# 將點位依照所屬的「圖幅_5K」進行分群，這樣每個 DEM 修正 檔只要打開一次就好
 grouped = joined_gdf.groupby('圖幅_5K')
 
 for mapid, group in grouped:
@@ -76,7 +76,7 @@ for mapid, group in grouped:
     # 取出這群點位的 X, Y 座標對
     coords = [(geom.x, geom.y) for geom in group.geometry]
 
-    # 使用 Rasterio 開啟 DEM 並提取數值
+    # 使用 Rasterio 開啟 DEM 修正 並提取數值
     try:
         with rasterio.open(dem_path) as src:
             # src.sample 會返回一個產生器，裡面包含這些座標對應的像素值

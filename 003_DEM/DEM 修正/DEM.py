@@ -6,7 +6,7 @@ from tqdm import tqdm
 from contextlib import contextmanager
 
 # ==================== 1. 參數設定 ====================
-input_dir = r"DEM"  # 原始 DEM 路徑
+input_dir = r"DEM 修正"  # 原始 DEM 修正 路徑
 output_dir = r"成果"  # 成果儲存路徑
 excel_path = r"電子地圖正射圖幅外擴計算表.xlsx"  # 座標 Excel
 max_search_dist = 1  # 搜尋鄰近像素的距離，針對 1 像素空洞設為 1
